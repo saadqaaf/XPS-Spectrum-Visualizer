@@ -1,0 +1,503 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>XPS Spectrum Visualizer: Linear Energy Scale</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        body { font-family: 'Segoe UI', system-ui, sans-serif; overflow: hidden; }
+        
+        /* Custom Scrollbar */
+        ::-webkit-scrollbar { height: 10px; width: 10px; }
+        ::-webkit-scrollbar-track { background: #1e293b; }
+        ::-webkit-scrollbar-thumb { background: #475569; border-radius: 5px; }
+        ::-webkit-scrollbar-thumb:hover { background: #64748b; }
+
+        /* Spectrum Container */
+        .spectrum-track {
+            position: relative;
+            height: 100%;
+            background: linear-gradient(180deg, #0f172a 0%, #1e293b 100%);
+            border-top: 1px solid #334155;
+            cursor: grab;
+            user-select: none;
+        }
+        .spectrum-track:active { cursor: grabbing; }
+
+        /* The Line */
+        .energy-axis {
+            position: absolute;
+            bottom: 0;
+            left: 0;
+            height: 2px;
+            background: #94a3b8;
+            transform-origin: left bottom;
+        }
+
+        /* Peak Marker */
+        .peak-marker {
+            position: absolute;
+            bottom: 0;
+            width: 2px;
+            background-color: rgba(99, 102, 241, 0.6); /* Indigo-500 */
+            transition: height 0.2s, background-color 0.2s, width 0.2s, z-index 0s;
+            cursor: pointer;
+            z-index: 10;
+        }
+        
+        .peak-marker:hover {
+            background-color: #38bdf8; /* Sky-400 */
+            width: 4px;
+            z-index: 50;
+            box-shadow: 0 0 10px #38bdf8;
+        }
+
+        .peak-fingerprint {
+            background-color: #f59e0b; /* Amber-500 */
+            width: 3px;
+            z-index: 20;
+        }
+        .peak-fingerprint:hover {
+            background-color: #fbbf24; /* Amber-400 */
+            box-shadow: 0 0 15px #fbbf24;
+        }
+
+        /* Labels on Axis */
+        .axis-tick {
+            position: absolute;
+            bottom: -25px;
+            font-size: 10px;
+            color: #94a3b8;
+            transform: translateX(-50%);
+            white-space: nowrap;
+        }
+        .axis-tick::before {
+            content: '';
+            position: absolute;
+            top: -5px;
+            left: 50%;
+            width: 1px;
+            height: 5px;
+            background: #94a3b8;
+        }
+
+        /* Tooltip */
+        #tooltip {
+            position: fixed;
+            background: rgba(15, 23, 42, 0.95);
+            border: 1px solid #334155;
+            color: white;
+            padding: 8px 12px;
+            border-radius: 6px;
+            font-size: 12px;
+            pointer-events: none;
+            z-index: 100;
+            box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.5);
+            transition: opacity 0.1s;
+            opacity: 0;
+            transform: translate(-50%, -100%);
+            margin-top: -10px;
+        }
+
+        /* Mini-Map */
+        #minimap {
+            height: 40px;
+            background: #020617;
+            position: relative;
+            overflow: hidden;
+        }
+        #minimap-viewport {
+            position: absolute;
+            top: 0;
+            bottom: 0;
+            border: 2px solid #38bdf8;
+            background: rgba(56, 189, 248, 0.1);
+            cursor: pointer;
+        }
+    </style>
+</head>
+<body class="bg-slate-900 text-slate-200 h-screen flex flex-col">
+
+    <!-- Top Bar: Controls -->
+    <header class="bg-slate-800 border-b border-slate-700 p-4 flex flex-col md:flex-row gap-4 items-center justify-between shrink-0 z-20">
+        <div class="flex items-center gap-4">
+            <div class="w-10 h-10 bg-indigo-600 rounded flex items-center justify-center font-bold text-xl shadow-lg shadow-indigo-500/20">eV</div>
+            <div>
+                <h1 class="font-bold text-lg text-white">XPS Spectrum Visualizer</h1>
+                <p class="text-xs text-slate-400">0 eV to <span id="max-ev-display">120,000</span> eV Line</p>
+            </div>
+        </div>
+
+        <div class="flex items-center gap-6">
+            <!-- Search -->
+            <div class="relative">
+                <input type="text" id="searchInput" placeholder="Find Element (e.g. Au, Carbon)" 
+                    class="bg-slate-900 border border-slate-600 text-sm rounded-lg focus:ring-indigo-500 focus:border-indigo-500 block w-64 pl-10 p-2 text-white">
+                <svg class="w-4 h-4 text-slate-400 absolute left-3 top-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"></path></svg>
+            </div>
+
+            <!-- Zoom Controls -->
+            <div class="flex flex-col w-48">
+                <div class="flex justify-between text-xs text-slate-400 mb-1">
+                    <span>Zoom</span>
+                    <span id="zoom-label">Standard (Al Kα)</span>
+                </div>
+                <input type="range" id="zoomSlider" min="1" max="500" value="100" class="w-full h-2 bg-slate-700 rounded-lg appearance-none cursor-pointer accent-indigo-500">
+            </div>
+        </div>
+    </header>
+
+    <!-- Main Visualizer Area -->
+    <div id="main-container" class="flex-1 relative overflow-x-auto overflow-y-hidden bg-slate-950 custom-scrollbar">
+        <div id="spectrum-track" class="spectrum-track" style="width: 2000px;">
+            <div id="axis-line" class="energy-axis w-full"></div>
+            <!-- Peaks injected here -->
+            <div id="ticks-container"></div>
+            <div id="peaks-container"></div>
+        </div>
+    </div>
+
+    <!-- Minimap / Navigation -->
+    <div class="bg-slate-900 border-t border-slate-800 p-2 shrink-0">
+        <div class="flex justify-between text-[10px] text-slate-500 mb-1 px-1">
+            <span>0 eV</span>
+            <span>Full Range (~120 keV)</span>
+        </div>
+        <div id="minimap">
+            <canvas id="minimap-canvas" class="w-full h-full block"></canvas>
+            <div id="minimap-viewport"></div>
+        </div>
+    </div>
+
+    <!-- Tooltip -->
+    <div id="tooltip">
+        <div class="font-bold text-indigo-400 mb-1" id="tt-element">Ti 2p</div>
+        <div class="text-white"><span id="tt-energy">453.8</span> eV</div>
+    </div>
+
+    <script>
+        // --- DATA SOURCE (Consolidated) ---
+        const elementsData = {
+            1: { symbol: "H", name: "Hydrogen", peaks: [{l:"1s", be: 13.6, p:true}] },
+            2: { symbol: "He", name: "Helium", peaks: [{l:"1s", be: 24.6, p:true}] },
+            3: { symbol: "Li", name: "Lithium", peaks: [{l:"1s", be: 54.7, p:true}] },
+            4: { symbol: "Be", name: "Beryllium", peaks: [{l:"1s", be: 111.5, p:true}] },
+            5: { symbol: "B", name: "Boron", peaks: [{l:"1s", be: 188, p:true}] },
+            6: { symbol: "C", name: "Carbon", peaks: [{l:"1s", be: 284.2, p:true}] },
+            7: { symbol: "N", name: "Nitrogen", peaks: [{l:"1s", be: 409.9, p:true}, {l:"2s", be: 37.3}] },
+            8: { symbol: "O", name: "Oxygen", peaks: [{l:"1s", be: 543.1, p:true}, {l:"2s", be: 41.6}] },
+            9: { symbol: "F", name: "Fluorine", peaks: [{l:"1s", be: 696.7, p:true}] },
+            10: { symbol: "Ne", name: "Neon", peaks: [{l:"1s", be: 870.2, p:true}, {l:"2s", be: 48.5}, {l:"2p1/2", be: 21.7}, {l:"2p3/2", be: 21.6}] },
+            11: { symbol: "Na", name: "Sodium", peaks: [{l:"1s", be: 1070.8, p:true}, {l:"2s", be: 63.5}, {l:"2p1/2", be: 30.65}, {l:"2p3/2", be: 30.81}] },
+            12: { symbol: "Mg", name: "Magnesium", peaks: [{l:"1s", be: 1303.0, p:true}, {l:"2s", be: 88.7}, {l:"2p1/2", be: 49.78}, {l:"2p3/2", be: 49.50}] },
+            13: { symbol: "Al", name: "Aluminum", peaks: [{l:"1s", be: 1559.6}, {l:"2s", be: 117.8}, {l:"2p1/2", be: 72.95}, {l:"2p3/2", be: 72.55, p:true}] },
+            14: { symbol: "Si", name: "Silicon", peaks: [{l:"1s", be: 1839}, {l:"2s", be: 149.7}, {l:"2p1/2", be: 99.82}, {l:"2p3/2", be: 99.42, p:true}] },
+            15: { symbol: "P", name: "Phosphorus", peaks: [{l:"1s", be: 2145.5}, {l:"2s", be: 189}, {l:"2p1/2", be: 136}, {l:"2p3/2", be: 135, p:true}] },
+            16: { symbol: "S", name: "Sulfur", peaks: [{l:"1s", be: 2472}, {l:"2s", be: 230.9}, {l:"2p1/2", be: 163.6}, {l:"2p3/2", be: 162.5, p:true}] },
+            17: { symbol: "Cl", name: "Chlorine", peaks: [{l:"1s", be: 2822.4}, {l:"2s", be: 270}, {l:"2p1/2", be: 202}, {l:"2p3/2", be: 200, p:true}] },
+            18: { symbol: "Ar", name: "Argon", peaks: [{l:"1s", be: 3205.9}, {l:"2s", be: 326.3}, {l:"2p1/2", be: 250.6}, {l:"2p3/2", be: 248.4, p:true}, {l:"3s", be: 29.3}, {l:"3p1/2", be: 15.9}, {l:"3p3/2", be: 15.7}] },
+            19: { symbol: "K", name: "Potassium", peaks: [{l:"1s", be: 3608.4}, {l:"2s", be: 378.6}, {l:"2p1/2", be: 297.3}, {l:"2p3/2", be: 294.6, p:true}, {l:"3s", be: 34.8}, {l:"3p1/2", be: 18.3}, {l:"3p3/2", be: 18.3}] },
+            20: { symbol: "Ca", name: "Calcium", peaks: [{l:"1s", be: 4038.5}, {l:"2s", be: 438.4}, {l:"2p1/2", be: 349.7}, {l:"2p3/2", be: 346.2, p:true}, {l:"3s", be: 44.3}, {l:"3p1/2", be: 25.4}, {l:"3p3/2", be: 25.4}] },
+            21: { symbol: "Sc", name: "Scandium", peaks: [{l:"1s", be: 4492}, {l:"2s", be: 498.0}, {l:"2p1/2", be: 403.6}, {l:"2p3/2", be: 398.7, p:true}, {l:"3s", be: 51.1}, {l:"3p1/2", be: 28.3}, {l:"3p3/2", be: 28.3}] },
+            22: { symbol: "Ti", name: "Titanium", peaks: [{l:"1s", be: 4966}, {l:"2s", be: 560.9}, {l:"2p1/2", be: 460.2}, {l:"2p3/2", be: 453.8, p:true}, {l:"3s", be: 58.7}, {l:"3p1/2", be: 32.6}, {l:"3p3/2", be: 32.6}] },
+            23: { symbol: "V", name: "Vanadium", peaks: [{l:"1s", be: 5465}, {l:"2s", be: 626.7}, {l:"2p1/2", be: 519.8}, {l:"2p3/2", be: 512.1, p:true}, {l:"3s", be: 66.3}, {l:"3p1/2", be: 37.2}, {l:"3p3/2", be: 37.2}] },
+            24: { symbol: "Cr", name: "Chromium", peaks: [{l:"1s", be: 5989}, {l:"2s", be: 696.0}, {l:"2p1/2", be: 583.8}, {l:"2p3/2", be: 574.1, p:true}, {l:"3s", be: 74.1}, {l:"3p1/2", be: 42.2}, {l:"3p3/2", be: 42.2}] },
+            25: { symbol: "Mn", name: "Manganese", peaks: [{l:"1s", be: 6539}, {l:"2s", be: 769.1}, {l:"2p1/2", be: 649.9}, {l:"2p3/2", be: 638.7, p:true}, {l:"3s", be: 82.3}, {l:"3p1/2", be: 47.2}, {l:"3p3/2", be: 47.2}] },
+            26: { symbol: "Fe", name: "Iron", peaks: [{l:"1s", be: 7112}, {l:"2s", be: 844.6}, {l:"2p1/2", be: 719.9}, {l:"2p3/2", be: 706.8, p:true}, {l:"3s", be: 91.3}, {l:"3p1/2", be: 52.7}, {l:"3p3/2", be: 52.7}] },
+            27: { symbol: "Co", name: "Cobalt", peaks: [{l:"1s", be: 7709}, {l:"2s", be: 925.1}, {l:"2p1/2", be: 793.2}, {l:"2p3/2", be: 778.1, p:true}, {l:"3s", be: 101.0}, {l:"3p1/2", be: 58.9}, {l:"3p3/2", be: 59.9}] },
+            28: { symbol: "Ni", name: "Nickel", peaks: [{l:"1s", be: 8333}, {l:"2s", be: 1008.6}, {l:"2p1/2", be: 870.0}, {l:"2p3/2", be: 852.7, p:true}, {l:"3s", be: 110.8}, {l:"3p1/2", be: 68.0}, {l:"3p3/2", be: 66.2}] },
+            29: { symbol: "Cu", name: "Copper", peaks: [{l:"1s", be: 8979}, {l:"2s", be: 1096.7}, {l:"2p1/2", be: 952.3}, {l:"2p3/2", be: 932.7, p:true}, {l:"3s", be: 122.5}, {l:"3p1/2", be: 77.3}, {l:"3p3/2", be: 75.1}] },
+            30: { symbol: "Zn", name: "Zinc", peaks: [{l:"1s", be: 9659}, {l:"2s", be: 1196.2}, {l:"2p1/2", be: 1044.9}, {l:"2p3/2", be: 1021.8, p:true}, {l:"3s", be: 139.8}, {l:"3p1/2", be: 91.4}, {l:"3p3/2", be: 88.6}, {l:"3d3/2", be: 10.2}, {l:"3d5/2", be: 10.1}] },
+            31: { symbol: "Ga", name: "Gallium", peaks: [{l:"1s", be: 10367}, {l:"2s", be: 1299.0}, {l:"2p1/2", be: 1143.2}, {l:"2p3/2", be: 1116.4, p:true}, {l:"3s", be: 159.5}, {l:"3p1/2", be: 103.5}, {l:"3p3/2", be: 100.0}, {l:"3d", be: 18.7}] },
+            32: { symbol: "Ge", name: "Germanium", peaks: [{l:"1s", be: 11103}, {l:"2s", be: 1414.6}, {l:"2p1/2", be: 1248.1}, {l:"2p3/2", be: 1217.0, p:true}, {l:"3s", be: 180.1}, {l:"3p1/2", be: 124.9}, {l:"3p3/2", be: 120.8}, {l:"3d3/2", be: 29.8}, {l:"3d5/2", be: 29.2}] },
+            33: { symbol: "As", name: "Arsenic", peaks: [{l:"1s", be: 11867}, {l:"2s", be: 1527.0}, {l:"2p1/2", be: 1359.1}, {l:"2p3/2", be: 1323.6}, {l:"3s", be: 204.7}, {l:"3p1/2", be: 146.2}, {l:"3p3/2", be: 141.2}, {l:"3d", be: 41.7, p:true}] },
+            34: { symbol: "Se", name: "Selenium", peaks: [{l:"1s", be: 12658}, {l:"2s", be: 1652.0}, {l:"2p1/2", be: 1474.3}, {l:"2p3/2", be: 1433.9}, {l:"3s", be: 229.6}, {l:"3p1/2", be: 166.5}, {l:"3p3/2", be: 160.7}, {l:"3d3/2", be: 55.5}, {l:"3d5/2", be: 54.6, p:true}] },
+            35: { symbol: "Br", name: "Bromine", peaks: [{l:"1s", be: 13474}, {l:"2s", be: 1782}, {l:"2p1/2", be: 1596}, {l:"2p3/2", be: 1550}, {l:"3s", be: 257}, {l:"3p1/2", be: 189}, {l:"3p3/2", be: 182}, {l:"3d3/2", be: 70}, {l:"3d5/2", be: 69, p:true}] },
+            36: { symbol: "Kr", name: "Krypton", peaks: [{l:"1s", be: 14326}, {l:"2s", be: 1921}, {l:"2p1/2", be: 1730.9}, {l:"2p3/2", be: 1678.4}, {l:"3s", be: 292.8}, {l:"3p1/2", be: 222.2}, {l:"3p3/2", be: 214.4}, {l:"3d3/2", be: 95.0}, {l:"3d5/2", be: 93.8, p:true}, {l:"4s", be: 27.5}, {l:"4p1/2", be: 14.1}, {l:"4p3/2", be: 14.1}] },
+            37: { symbol: "Rb", name: "Rubidium", peaks: [{l:"1s", be: 15200}, {l:"2s", be: 2065}, {l:"2p1/2", be: 1864}, {l:"2p3/2", be: 1804}, {l:"3s", be: 326.7}, {l:"3p1/2", be: 248.7}, {l:"3p3/2", be: 239.1}, {l:"3d3/2", be: 113.0}, {l:"3d5/2", be: 112, p:true}, {l:"4s", be: 30.5}, {l:"4p1/2", be: 16.3}, {l:"4p3/2", be: 15.3}] },
+            38: { symbol: "Sr", name: "Strontium", peaks: [{l:"1s", be: 16105}, {l:"2s", be: 2216}, {l:"2p1/2", be: 2007}, {l:"2p3/2", be: 1940}, {l:"3s", be: 358.7}, {l:"3p1/2", be: 280.3}, {l:"3p3/2", be: 270.0}, {l:"3d3/2", be: 136.0}, {l:"3d5/2", be: 134.2, p:true}, {l:"4s", be: 38.9}, {l:"4p1/2", be: 21.3}, {l:"4p3/2", be: 20.1}] },
+            39: { symbol: "Y", name: "Yttrium", peaks: [{l:"1s", be: 17038}, {l:"2s", be: 2373}, {l:"2p1/2", be: 2156}, {l:"2p3/2", be: 2080}, {l:"3s", be: 392.0}, {l:"3p1/2", be: 310.6}, {l:"3p3/2", be: 298.8}, {l:"3d3/2", be: 157.7}, {l:"3d5/2", be: 155.8, p:true}, {l:"4s", be: 43.8}, {l:"4p1/2", be: 24.4}, {l:"4p3/2", be: 23.1}] },
+            40: { symbol: "Zr", name: "Zirconium", peaks: [{l:"1s", be: 17998}, {l:"2s", be: 2532}, {l:"2p1/2", be: 2307}, {l:"2p3/2", be: 2223}, {l:"3s", be: 430.3}, {l:"3p1/2", be: 343.5}, {l:"3p3/2", be: 329.8}, {l:"3d3/2", be: 181.1}, {l:"3d5/2", be: 178.8, p:true}, {l:"4s", be: 50.6}, {l:"4p1/2", be: 28.5}, {l:"4p3/2", be: 27.1}] },
+            41: { symbol: "Nb", name: "Niobium", peaks: [{l:"1s", be: 18986}, {l:"2s", be: 2698}, {l:"2p1/2", be: 2465}, {l:"2p3/2", be: 2371}, {l:"3s", be: 466.6}, {l:"3p1/2", be: 376.1}, {l:"3p3/2", be: 360.6}, {l:"3d3/2", be: 205.0}, {l:"3d5/2", be: 202.3, p:true}, {l:"4s", be: 56.4}, {l:"4p1/2", be: 32.6}, {l:"4p3/2", be: 30.8}] },
+            42: { symbol: "Mo", name: "Molybdenum", peaks: [{l:"1s", be: 20000}, {l:"2s", be: 2866}, {l:"2p1/2", be: 2625}, {l:"2p3/2", be: 2520}, {l:"3s", be: 506.3}, {l:"3p1/2", be: 411.6}, {l:"3p3/2", be: 394.0}, {l:"3d3/2", be: 231.1}, {l:"3d5/2", be: 227.9, p:true}, {l:"4s", be: 63.2}, {l:"4p1/2", be: 37.6}, {l:"4p3/2", be: 35.5}] },
+            43: { symbol: "Tc", name: "Technetium", peaks: [{l:"1s", be: 21044}, {l:"2s", be: 3043}, {l:"2p1/2", be: 2793}, {l:"2p3/2", be: 2677}, {l:"3s", be: 544}, {l:"3p1/2", be: 447.6}, {l:"3p3/2", be: 417.7}, {l:"3d3/2", be: 257.6}, {l:"3d5/2", be: 253.9, p:true}, {l:"4s", be: 69.5}, {l:"4p1/2", be: 42.3}, {l:"4p3/2", be: 39.9}] },
+            44: { symbol: "Ru", name: "Ruthenium", peaks: [{l:"1s", be: 22117}, {l:"2s", be: 3224}, {l:"2p1/2", be: 2967}, {l:"2p3/2", be: 2838}, {l:"3s", be: 586.1}, {l:"3p1/2", be: 483.5}, {l:"3p3/2", be: 461.4}, {l:"3d3/2", be: 284.2}, {l:"3d5/2", be: 280.0, p:true}, {l:"4s", be: 75.0}, {l:"4p1/2", be: 46.3}, {l:"4p3/2", be: 43.2}] },
+            45: { symbol: "Rh", name: "Rhodium", peaks: [{l:"1s", be: 23220}, {l:"2s", be: 3412}, {l:"2p1/2", be: 3146}, {l:"2p3/2", be: 3004}, {l:"3s", be: 628.1}, {l:"3p1/2", be: 521.3}, {l:"3p3/2", be: 496.5}, {l:"3d3/2", be: 311.9}, {l:"3d5/2", be: 307.2, p:true}, {l:"4s", be: 81.4}, {l:"4p1/2", be: 50.5}, {l:"4p3/2", be: 47.3}] },
+            46: { symbol: "Pd", name: "Palladium", peaks: [{l:"1s", be: 24350}, {l:"2s", be: 3604}, {l:"2p1/2", be: 3330}, {l:"2p3/2", be: 3173}, {l:"3s", be: 671.6}, {l:"3p1/2", be: 559.9}, {l:"3p3/2", be: 532.3}, {l:"3d3/2", be: 340.5}, {l:"3d5/2", be: 335.2, p:true}, {l:"4s", be: 87.1}, {l:"4p1/2", be: 55.7}, {l:"4p3/2", be: 50.9}] },
+            47: { symbol: "Ag", name: "Silver", peaks: [{l:"1s", be: 25514}, {l:"2s", be: 3806}, {l:"2p1/2", be: 3524}, {l:"2p3/2", be: 3351}, {l:"3s", be: 719.0}, {l:"3p1/2", be: 603.8}, {l:"3p3/2", be: 573.0}, {l:"3d3/2", be: 374.0}, {l:"3d5/2", be: 368.3, p:true}, {l:"4s", be: 97.0}, {l:"4p1/2", be: 63.7}, {l:"4p3/2", be: 58.3}] },
+            48: { symbol: "Cd", name: "Cadmium", peaks: [{l:"1s", be: 26711}, {l:"2s", be: 4018}, {l:"2p1/2", be: 3727}, {l:"2p3/2", be: 3538}, {l:"3s", be: 772.0}, {l:"3p1/2", be: 652.6}, {l:"3p3/2", be: 618.4}, {l:"3d3/2", be: 411.9}, {l:"3d5/2", be: 405.2, p:true}, {l:"4s", be: 109.8}, {l:"4p1/2", be: 63.9}, {l:"4p3/2", be: 63.9}, {l:"4d3/2", be: 11.7}, {l:"4d5/2", be: 10.7}] },
+            49: { symbol: "In", name: "Indium", peaks: [{l:"1s", be: 27940}, {l:"2s", be: 4238}, {l:"2p1/2", be: 3938}, {l:"2p3/2", be: 3730}, {l:"3s", be: 827.2}, {l:"3p1/2", be: 703.2}, {l:"3p3/2", be: 665.3}, {l:"3d3/2", be: 451.4}, {l:"3d5/2", be: 443.9, p:true}, {l:"4s", be: 122.9}, {l:"4p1/2", be: 73.5}, {l:"4p3/2", be: 73.5}, {l:"4d3/2", be: 17.7}, {l:"4d5/2", be: 16.9}] },
+            50: { symbol: "Sn", name: "Tin", peaks: [{l:"1s", be: 29200}, {l:"2s", be: 4465}, {l:"2p1/2", be: 4156}, {l:"2p3/2", be: 3929}, {l:"3s", be: 884.7}, {l:"3p1/2", be: 756.5}, {l:"3p3/2", be: 714.6}, {l:"3d3/2", be: 493.2}, {l:"3d5/2", be: 484.9, p:true}, {l:"4s", be: 137.1}, {l:"4p1/2", be: 83.6}, {l:"4p3/2", be: 83.6}, {l:"4d3/2", be: 24.9}, {l:"4d5/2", be: 23.9}] },
+            51: { symbol: "Sb", name: "Antimony", peaks: [{l:"1s", be: 30491}, {l:"2s", be: 4698}, {l:"2p1/2", be: 4380}, {l:"2p3/2", be: 4132}, {l:"3s", be: 946}, {l:"3p1/2", be: 812.7}, {l:"3p3/2", be: 766.4}, {l:"3d3/2", be: 537.5}, {l:"3d5/2", be: 528.2, p:true}, {l:"4s", be: 153.2}, {l:"4p1/2", be: 95.6}, {l:"4p3/2", be: 95.6}, {l:"4d3/2", be: 33.3}, {l:"4d5/2", be: 32.1}] },
+            52: { symbol: "Te", name: "Tellurium", peaks: [{l:"1s", be: 31814}, {l:"2s", be: 4939}, {l:"2p1/2", be: 4612}, {l:"2p3/2", be: 4341}, {l:"3s", be: 1006}, {l:"3p1/2", be: 870.8}, {l:"3p3/2", be: 820.0}, {l:"3d3/2", be: 583.4}, {l:"3d5/2", be: 573.0, p:true}, {l:"4s", be: 169.4}, {l:"4p1/2", be: 103.3}, {l:"4p3/2", be: 103.3}, {l:"4d3/2", be: 41.9}, {l:"4d5/2", be: 40.4}] },
+            53: { symbol: "I", name: "Iodine", peaks: [{l:"1s", be: 33169}, {l:"2s", be: 5188}, {l:"2p1/2", be: 4852}, {l:"2p3/2", be: 4557}, {l:"3s", be: 1072}, {l:"3p1/2", be: 931}, {l:"3p3/2", be: 875}, {l:"3d3/2", be: 630.8}, {l:"3d5/2", be: 619.3, p:true}, {l:"4s", be: 186}, {l:"4p1/2", be: 123}, {l:"4p3/2", be: 123}, {l:"4d3/2", be: 50.6}, {l:"4d5/2", be: 48.9}] },
+            54: { symbol: "Xe", name: "Xenon", peaks: [{l:"1s", be: 34561}, {l:"2s", be: 5453}, {l:"2p1/2", be: 5107}, {l:"2p3/2", be: 4786}, {l:"3s", be: 1148.7}, {l:"3p1/2", be: 1002.1}, {l:"3p3/2", be: 940.6}, {l:"3d3/2", be: 689.0}, {l:"3d5/2", be: 676.4, p:true}, {l:"4s", be: 213.2}, {l:"4p1/2", be: 146.7}, {l:"4p3/2", be: 145.5}, {l:"4d3/2", be: 69.5}, {l:"4d5/2", be: 67.5}, {l:"5s", be: 23.3}, {l:"5p1/2", be: 13.4}, {l:"5p3/2", be: 12.1}] },
+            55: { symbol: "Cs", name: "Cesium", peaks: [{l:"1s", be: 35985}, {l:"2s", be: 5714}, {l:"2p1/2", be: 5359}, {l:"2p3/2", be: 5012}, {l:"3s", be: 1211}, {l:"3p1/2", be: 1071}, {l:"3p3/2", be: 1003}, {l:"3d3/2", be: 740.5}, {l:"3d5/2", be: 726.6, p:true}, {l:"4s", be: 232.3}, {l:"4p1/2", be: 172.4}, {l:"4p3/2", be: 161.3}, {l:"4d3/2", be: 79.8}, {l:"4d5/2", be: 77.5}, {l:"5s", be: 22.7}, {l:"5p1/2", be: 14.2}, {l:"5p3/2", be: 12.1}] },
+            56: { symbol: "Ba", name: "Barium", peaks: [{l:"1s", be: 37441}, {l:"2s", be: 5989}, {l:"2p1/2", be: 5624}, {l:"2p3/2", be: 5247}, {l:"3s", be: 1293}, {l:"3p1/2", be: 1137}, {l:"3p3/2", be: 1063}, {l:"3d3/2", be: 795.7}, {l:"3d5/2", be: 780.5, p:true}, {l:"4s", be: 253.5}, {l:"4p1/2", be: 192}, {l:"4p3/2", be: 178.6}, {l:"4d3/2", be: 92.6}, {l:"4d5/2", be: 89.9}, {l:"5s", be: 30.3}, {l:"5p1/2", be: 17.0}, {l:"5p3/2", be: 14.8}] },
+            57: { symbol: "La", name: "Lanthanum", peaks: [{l:"1s", be: 38925}, {l:"2s", be: 6266}, {l:"2p1/2", be: 5891}, {l:"2p3/2", be: 5483}, {l:"3s", be: 1362}, {l:"3p1/2", be: 1209}, {l:"3p3/2", be: 1128}, {l:"3d3/2", be: 853}, {l:"3d5/2", be: 836, p:true}, {l:"4s", be: 274.7}, {l:"4p1/2", be: 205.8}, {l:"4p3/2", be: 196.0}, {l:"4d3/2", be: 105.3}, {l:"4d5/2", be: 102.5}, {l:"5s", be: 34.3}, {l:"5p1/2", be: 19.3}, {l:"5p3/2", be: 16.8}] },
+            58: { symbol: "Ce", name: "Cerium", peaks: [{l:"1s", be: 40443}, {l:"2s", be: 6549}, {l:"2p1/2", be: 6164}, {l:"2p3/2", be: 5723}, {l:"3s", be: 1436}, {l:"3p1/2", be: 1274}, {l:"3p3/2", be: 1187}, {l:"3d3/2", be: 902.4}, {l:"3d5/2", be: 883.8, p:true}, {l:"4s", be: 291.0}, {l:"4p1/2", be: 223.2}, {l:"4p3/2", be: 206.5}, {l:"4d3/2", be: 109}, {l:"4f5/2", be: 0.1}, {l:"4f7/2", be: 0.1}, {l:"5s", be: 37.8}, {l:"5p1/2", be: 19.8}, {l:"5p3/2", be: 17.0}] },
+            59: { symbol: "Pr", name: "Praseodymium", peaks: [{l:"1s", be: 41991}, {l:"2s", be: 6835}, {l:"2p1/2", be: 6440}, {l:"2p3/2", be: 5964}, {l:"3s", be: 1511}, {l:"3p1/2", be: 1337}, {l:"3p3/2", be: 1242}, {l:"3d3/2", be: 948.3}, {l:"3d5/2", be: 928.8, p:true}, {l:"4s", be: 304.5}, {l:"4p1/2", be: 236.3}, {l:"4p3/2", be: 217.6}, {l:"4d3/2", be: 115.1}, {l:"4d5/2", be: 115.1}, {l:"4f5/2", be: 2.0}, {l:"4f7/2", be: 2.0}, {l:"5s", be: 37.4}, {l:"5p1/2", be: 22.3}, {l:"5p3/2", be: 22.3}] },
+            60: { symbol: "Nd", name: "Neodymium", peaks: [{l:"1s", be: 43569}, {l:"2s", be: 7126}, {l:"2p1/2", be: 6722}, {l:"2p3/2", be: 6208}, {l:"3s", be: 1575}, {l:"3p1/2", be: 1403}, {l:"3p3/2", be: 1297}, {l:"3d3/2", be: 1003.3}, {l:"3d5/2", be: 980.4, p:true}, {l:"4s", be: 319.2}, {l:"4p1/2", be: 243.3}, {l:"4p3/2", be: 224.6}, {l:"4d3/2", be: 120.5}, {l:"4d5/2", be: 120.5}, {l:"4f5/2", be: 1.5}, {l:"4f7/2", be: 1.5}, {l:"5s", be: 37.5}, {l:"5p1/2", be: 21.1}, {l:"5p3/2", be: 21.1}] },
+            61: { symbol: "Pm", name: "Promethium", peaks: [{l:"1s", be: 45184}, {l:"2s", be: 7428}, {l:"2p1/2", be: 7013}, {l:"2p3/2", be: 6459}, {l:"3p1/2", be: 1471}, {l:"3p3/2", be: 1357}, {l:"3d3/2", be: 1052}, {l:"3d5/2", be: 1027, p:true}, {l:"4p1/2", be: 242}, {l:"4p3/2", be: 242}, {l:"4d3/2", be: 120}, {l:"4d5/2", be: 120}] },
+            62: { symbol: "Sm", name: "Samarium", peaks: [{l:"1s", be: 46834}, {l:"2s", be: 7737}, {l:"2p1/2", be: 7312}, {l:"2p3/2", be: 6716}, {l:"3s", be: 1723}, {l:"3p1/2", be: 1541}, {l:"3p3/2", be: 1420}, {l:"3d3/2", be: 1110.9}, {l:"3d5/2", be: 1083.4, p:true}, {l:"4s", be: 347.2}, {l:"4p1/2", be: 265.6}, {l:"4p3/2", be: 247.4}, {l:"4d3/2", be: 129}, {l:"4d5/2", be: 129}, {l:"4f5/2", be: 5.2}, {l:"4f7/2", be: 5.2}, {l:"5s", be: 37.4}, {l:"5p1/2", be: 21.3}, {l:"5p3/2", be: 21.3}] },
+            63: { symbol: "Eu", name: "Europium", peaks: [{l:"1s", be: 48519}, {l:"2s", be: 8052}, {l:"2p1/2", be: 7617}, {l:"2p3/2", be: 6977}, {l:"3s", be: 1800}, {l:"3p1/2", be: 1614}, {l:"3p3/2", be: 1481}, {l:"3d3/2", be: 1158.6}, {l:"3d5/2", be: 1127.5}, {l:"4s", be: 360}, {l:"4p1/2", be: 284}, {l:"4p3/2", be: 257}, {l:"4d3/2", be: 133}, {l:"4d5/2", be: 127.7, p:true}, {l:"4f5/2", be: 0}, {l:"4f7/2", be: 0}, {l:"5s", be: 32}, {l:"5p1/2", be: 22}, {l:"5p3/2", be: 22}] },
+            64: { symbol: "Gd", name: "Gadolinium", peaks: [{l:"1s", be: 50239}, {l:"2s", be: 8376}, {l:"2p1/2", be: 7930}, {l:"2p3/2", be: 7243}, {l:"3s", be: 1881}, {l:"3p1/2", be: 1688}, {l:"3p3/2", be: 1544}, {l:"3d3/2", be: 1221.9}, {l:"3d5/2", be: 1189.6, p:true}, {l:"4s", be: 378.6}, {l:"4p1/2", be: 286}, {l:"4p3/2", be: 271}, {l:"4d5/2", be: 142.6}, {l:"4f5/2", be: 8.6}, {l:"4f7/2", be: 8.6}, {l:"5s", be: 36}, {l:"5p1/2", be: 28}, {l:"5p3/2", be: 21}] },
+            65: { symbol: "Tb", name: "Terbium", peaks: [{l:"1s", be: 51996}, {l:"2s", be: 8708}, {l:"2p1/2", be: 8252}, {l:"2p3/2", be: 7514}, {l:"3s", be: 1968}, {l:"3p1/2", be: 1768}, {l:"3p3/2", be: 1611}, {l:"3d3/2", be: 1276.9}, {l:"3d5/2", be: 1241.1, p:true}, {l:"4s", be: 396.0}, {l:"4p1/2", be: 322.4}, {l:"4p3/2", be: 284.1}, {l:"4d3/2", be: 150.5}, {l:"4d5/2", be: 150.5}, {l:"4f5/2", be: 7.7}, {l:"4f7/2", be: 2.4}, {l:"5s", be: 45.6}, {l:"5p1/2", be: 28.7}, {l:"5p3/2", be: 22.6}] },
+            66: { symbol: "Dy", name: "Dysprosium", peaks: [{l:"1s", be: 53789}, {l:"2s", be: 9046}, {l:"2p1/2", be: 8581}, {l:"2p3/2", be: 7790}, {l:"3s", be: 2047}, {l:"3p1/2", be: 1842}, {l:"3p3/2", be: 1676}, {l:"3d3/2", be: 1333}, {l:"3d5/2", be: 1292.6}, {l:"4s", be: 414.2}, {l:"4p1/2", be: 333.5}, {l:"4p3/2", be: 293.2}, {l:"4d3/2", be: 153.6, p:true}, {l:"4d5/2", be: 153.6}, {l:"4f5/2", be: 8.0}, {l:"4f7/2", be: 4.3}, {l:"5s", be: 49.9}, {l:"5p1/2", be: 26.3}, {l:"5p3/2", be: 26.3}] },
+            67: { symbol: "Ho", name: "Holmium", peaks: [{l:"1s", be: 55618}, {l:"2s", be: 9394}, {l:"2p1/2", be: 8918}, {l:"2p3/2", be: 8071}, {l:"3s", be: 2128}, {l:"3p1/2", be: 1923}, {l:"3p3/2", be: 1741}, {l:"3d3/2", be: 1392}, {l:"3d5/2", be: 1351}, {l:"4s", be: 432.4}, {l:"4p1/2", be: 343.5}, {l:"4p3/2", be: 308.2}, {l:"4d3/2", be: 160, p:true}, {l:"4d5/2", be: 160}, {l:"4f5/2", be: 8.6}, {l:"4f7/2", be: 5.2}, {l:"5s", be: 49.3}, {l:"5p1/2", be: 30.8}, {l:"5p3/2", be: 24.1}] },
+            68: { symbol: "Er", name: "Erbium", peaks: [{l:"1s", be: 57486}, {l:"2s", be: 9751}, {l:"2p1/2", be: 9264}, {l:"2p3/2", be: 8358}, {l:"3s", be: 2207}, {l:"3p1/2", be: 2006}, {l:"3p3/2", be: 1812}, {l:"3d3/2", be: 1453}, {l:"3d5/2", be: 1409}, {l:"4s", be: 449.8}, {l:"4p1/2", be: 366.2}, {l:"4p3/2", be: 320.2}, {l:"4d3/2", be: 167.6, p:true}, {l:"4d5/2", be: 167.6}, {l:"4f7/2", be: 4.7}, {l:"5s", be: 50.6}, {l:"5p1/2", be: 31.4}, {l:"5p3/2", be: 24.7}] },
+            69: { symbol: "Tm", name: "Thulium", peaks: [{l:"1s", be: 59390}, {l:"2s", be: 10116}, {l:"2p1/2", be: 9617}, {l:"2p3/2", be: 8648}, {l:"3s", be: 2307}, {l:"3p1/2", be: 2090}, {l:"3p3/2", be: 1885}, {l:"3d3/2", be: 1515}, {l:"3d5/2", be: 1468}, {l:"4s", be: 470.9}, {l:"4p1/2", be: 385.9}, {l:"4p3/2", be: 332.6}, {l:"4d3/2", be: 175.5, p:true}, {l:"4d5/2", be: 175.5}, {l:"4f7/2", be: 4.6}, {l:"5s", be: 54.7}, {l:"5p1/2", be: 31.8}, {l:"5p3/2", be: 25.0}] },
+            70: { symbol: "Yb", name: "Ytterbium", peaks: [{l:"1s", be: 61332}, {l:"2s", be: 10486}, {l:"2p1/2", be: 9978}, {l:"2p3/2", be: 8944}, {l:"3s", be: 2398}, {l:"3p1/2", be: 2173}, {l:"3p3/2", be: 1950}, {l:"3d3/2", be: 1576}, {l:"3d5/2", be: 1528}, {l:"4s", be: 480.5}, {l:"4p1/2", be: 388.7}, {l:"4p3/2", be: 339.7}, {l:"4d3/2", be: 191.2, p:true}, {l:"4d5/2", be: 182.4}, {l:"4f5/2", be: 2.5}, {l:"4f7/2", be: 1.3}, {l:"5s", be: 52.0}, {l:"5p1/2", be: 30.3}, {l:"5p3/2", be: 24.1}] },
+            71: { symbol: "Lu", name: "Lutetium", peaks: [{l:"1s", be: 63314}, {l:"2s", be: 10870}, {l:"2p1/2", be: 10349}, {l:"2p3/2", be: 9244}, {l:"3s", be: 2491}, {l:"3p1/2", be: 2264}, {l:"3p3/2", be: 2024}, {l:"3d3/2", be: 1639}, {l:"3d5/2", be: 1589}, {l:"4s", be: 506.8}, {l:"4p1/2", be: 412.4}, {l:"4p3/2", be: 359.2}, {l:"4d3/2", be: 206.1}, {l:"4d5/2", be: 196.3}, {l:"4f5/2", be: 8.9}, {l:"4f7/2", be: 7.5, p:true}, {l:"5s", be: 57.3}, {l:"5p1/2", be: 33.6}, {l:"5p3/2", be: 26.7}] },
+            72: { symbol: "Hf", name: "Hafnium", peaks: [{l:"1s", be: 65351}, {l:"2s", be: 11271}, {l:"2p1/2", be: 10739}, {l:"2p3/2", be: 9561}, {l:"3s", be: 2601}, {l:"3p1/2", be: 2365}, {l:"3p3/2", be: 2108}, {l:"3d3/2", be: 1716}, {l:"3d5/2", be: 1662}, {l:"4s", be: 538}, {l:"4p1/2", be: 438.2}, {l:"4p3/2", be: 380.7}, {l:"4d3/2", be: 220.0}, {l:"4d5/2", be: 211.5}, {l:"4f5/2", be: 15.9}, {l:"4f7/2", be: 14.2, p:true}, {l:"5s", be: 64.2}, {l:"5p1/2", be: 38}, {l:"5p3/2", be: 29.9}] },
+            73: { symbol: "Ta", name: "Tantalum", peaks: [{l:"1s", be: 67416}, {l:"2s", be: 11682}, {l:"2p1/2", be: 11136}, {l:"2p3/2", be: 9881}, {l:"3s", be: 2708}, {l:"3p1/2", be: 2469}, {l:"3p3/2", be: 2194}, {l:"3d3/2", be: 1793}, {l:"3d5/2", be: 1735}, {l:"4s", be: 563.4}, {l:"4p1/2", be: 463.4}, {l:"4p3/2", be: 400.9}, {l:"4d3/2", be: 237.9}, {l:"4d5/2", be: 226.4}, {l:"4f5/2", be: 23.5}, {l:"4f7/2", be: 21.6, p:true}, {l:"5s", be: 69.7}, {l:"5p1/2", be: 42.2}, {l:"5p3/2", be: 32.7}] },
+            74: { symbol: "W", name: "Tungsten", peaks: [{l:"1s", be: 69525}, {l:"2s", be: 12100}, {l:"2p1/2", be: 11544}, {l:"2p3/2", be: 10207}, {l:"3s", be: 2820}, {l:"3p1/2", be: 2575}, {l:"3p3/2", be: 2281}, {l:"3d3/2", be: 1872}, {l:"3d5/2", be: 1809}, {l:"4s", be: 594.1}, {l:"4p1/2", be: 490.4}, {l:"4p3/2", be: 423.6}, {l:"4d3/2", be: 255.9}, {l:"4d5/2", be: 243.5}, {l:"4f5/2", be: 33.6}, {l:"4f7/2", be: 31.4, p:true}, {l:"5s", be: 75.6}, {l:"5p1/2", be: 45.3}, {l:"5p3/2", be: 36.8}] },
+            75: { symbol: "Re", name: "Rhenium", peaks: [{l:"1s", be: 71676}, {l:"2s", be: 12527}, {l:"2p1/2", be: 11959}, {l:"2p3/2", be: 10535}, {l:"3s", be: 2932}, {l:"3p1/2", be: 2682}, {l:"3p3/2", be: 2367}, {l:"3d3/2", be: 1949}, {l:"3d5/2", be: 1883}, {l:"4s", be: 625.4}, {l:"4p1/2", be: 518.7}, {l:"4p3/2", be: 446.8}, {l:"4d3/2", be: 273.9}, {l:"4d5/2", be: 260.5}, {l:"4f5/2", be: 42.9}, {l:"4f7/2", be: 40.5, p:true}, {l:"5s", be: 83}, {l:"5p1/2", be: 45.6}, {l:"5p3/2", be: 34.6}] },
+            76: { symbol: "Os", name: "Osmium", peaks: [{l:"1s", be: 73871}, {l:"2s", be: 12968}, {l:"2p1/2", be: 12385}, {l:"2p3/2", be: 10871}, {l:"3s", be: 3049}, {l:"3p1/2", be: 2792}, {l:"3p3/2", be: 2457}, {l:"3d3/2", be: 2031}, {l:"3d5/2", be: 1960}, {l:"4s", be: 658.2}, {l:"4p1/2", be: 549.1}, {l:"4p3/2", be: 470.7}, {l:"4d3/2", be: 293.1}, {l:"4d5/2", be: 278.5}, {l:"4f5/2", be: 53.4}, {l:"4f7/2", be: 50.7, p:true}, {l:"5s", be: 84}, {l:"5p1/2", be: 58}, {l:"5p3/2", be: 44.5}] },
+            77: { symbol: "Ir", name: "Iridium", peaks: [{l:"1s", be: 76111}, {l:"2s", be: 13419}, {l:"2p1/2", be: 12824}, {l:"2p3/2", be: 11215}, {l:"3s", be: 3174}, {l:"3p1/2", be: 2909}, {l:"3p3/2", be: 2551}, {l:"3d3/2", be: 2116}, {l:"3d5/2", be: 2040}, {l:"4s", be: 691.1}, {l:"4p1/2", be: 577.8}, {l:"4p3/2", be: 495.8}, {l:"4d3/2", be: 311.9}, {l:"4d5/2", be: 296.3}, {l:"4f5/2", be: 63.8}, {l:"4f7/2", be: 60.8, p:true}, {l:"5s", be: 95.2}, {l:"5p1/2", be: 63.0}, {l:"5p3/2", be: 48.0}] },
+            78: { symbol: "Pt", name: "Platinum", peaks: [{l:"1s", be: 78395}, {l:"2s", be: 13880}, {l:"2p1/2", be: 13273}, {l:"2p3/2", be: 11564}, {l:"3s", be: 3296}, {l:"3p1/2", be: 3027}, {l:"3p3/2", be: 2645}, {l:"3d3/2", be: 2202}, {l:"3d5/2", be: 2122}, {l:"4s", be: 725.4}, {l:"4p1/2", be: 609.1}, {l:"4p3/2", be: 519.4}, {l:"4d3/2", be: 331.6}, {l:"4d5/2", be: 314.6}, {l:"4f5/2", be: 74.5}, {l:"4f7/2", be: 71.2, p:true}, {l:"5s", be: 101.7}, {l:"5p1/2", be: 65.3}, {l:"5p3/2", be: 51.7}] },
+            79: { symbol: "Au", name: "Gold", peaks: [{l:"1s", be: 80725}, {l:"2s", be: 14353}, {l:"2p1/2", be: 13734}, {l:"2p3/2", be: 11919}, {l:"3s", be: 3425}, {l:"3p1/2", be: 3148}, {l:"3p3/2", be: 2743}, {l:"3d3/2", be: 2291}, {l:"3d5/2", be: 2206}, {l:"4s", be: 762.1}, {l:"4p1/2", be: 642.7}, {l:"4p3/2", be: 546.3}, {l:"4d3/2", be: 353.2}, {l:"4d5/2", be: 335.1}, {l:"4f5/2", be: 87.6}, {l:"4f7/2", be: 84.0, p:true}, {l:"5s", be: 107.2}, {l:"5p1/2", be: 74.2}, {l:"5p3/2", be: 57.2}] },
+            80: { symbol: "Hg", name: "Mercury", peaks: [{l:"1s", be: 83102}, {l:"2s", be: 14839}, {l:"2p1/2", be: 14209}, {l:"2p3/2", be: 12284}, {l:"3s", be: 3562}, {l:"3p1/2", be: 3279}, {l:"3p3/2", be: 2847}, {l:"3d3/2", be: 2385}, {l:"3d5/2", be: 2295}, {l:"4s", be: 802.2}, {l:"4p1/2", be: 680.2}, {l:"4p3/2", be: 576.6}, {l:"4d3/2", be: 378.2}, {l:"4d5/2", be: 358.8}, {l:"4f5/2", be: 104.0}, {l:"4f7/2", be: 99.9, p:true}, {l:"5s", be: 127}, {l:"5p1/2", be: 83.1}, {l:"5p3/2", be: 64.5}, {l:"5d3/2", be: 9.6}, {l:"5d5/2", be: 7.8}] },
+            81: { symbol: "Tl", name: "Thallium", peaks: [{l:"1s", be: 85530}, {l:"2s", be: 15347}, {l:"2p1/2", be: 14698}, {l:"2p3/2", be: 12658}, {l:"3s", be: 3704}, {l:"3p1/2", be: 3416}, {l:"3p3/2", be: 2957}, {l:"3d3/2", be: 2485}, {l:"3d5/2", be: 2389}, {l:"4s", be: 846.2}, {l:"4p1/2", be: 720.5}, {l:"4p3/2", be: 609.5}, {l:"4d3/2", be: 405.7}, {l:"4d5/2", be: 385.0}, {l:"4f5/2", be: 122.2}, {l:"4f7/2", be: 117.8, p:true}, {l:"5s", be: 136.0}, {l:"5p1/2", be: 94.6}, {l:"5p3/2", be: 73.5}, {l:"5d3/2", be: 14.7}, {l:"5d5/2", be: 12.5}] },
+            82: { symbol: "Pb", name: "Lead", peaks: [{l:"1s", be: 88005}, {l:"2s", be: 15861}, {l:"2p1/2", be: 15200}, {l:"2p3/2", be: 13035}, {l:"3s", be: 3851}, {l:"3p1/2", be: 3554}, {l:"3p3/2", be: 3066}, {l:"3d3/2", be: 2586}, {l:"3d5/2", be: 2484}, {l:"4s", be: 891.8}, {l:"4p1/2", be: 761.9}, {l:"4p3/2", be: 643.5}, {l:"4d3/2", be: 434.3}, {l:"4d5/2", be: 412.2}, {l:"4f5/2", be: 141.7}, {l:"4f7/2", be: 136.9, p:true}, {l:"5s", be: 147}, {l:"5p1/2", be: 106.4}, {l:"5p3/2", be: 83.3}, {l:"5d3/2", be: 20.7}, {l:"5d5/2", be: 18.1}] },
+            83: { symbol: "Bi", name: "Bismuth", peaks: [{l:"1s", be: 90524}, {l:"2s", be: 16388}, {l:"2p1/2", be: 15711}, {l:"2p3/2", be: 13419}, {l:"3s", be: 3999}, {l:"3p1/2", be: 3696}, {l:"3p3/2", be: 3177}, {l:"3d3/2", be: 2688}, {l:"3d5/2", be: 2580}, {l:"4s", be: 939}, {l:"4p1/2", be: 805.2}, {l:"4p3/2", be: 678.8}, {l:"4d3/2", be: 464.0}, {l:"4d5/2", be: 440.1}, {l:"4f5/2", be: 162.3}, {l:"4f7/2", be: 157.0, p:true}, {l:"5s", be: 159.3}, {l:"5p1/2", be: 119.0}, {l:"5p3/2", be: 92.6}, {l:"5d3/2", be: 26.9}, {l:"5d5/2", be: 23.8}] },
+            84: { symbol: "Po", name: "Polonium", peaks: [{l:"1s", be: 93105}, {l:"2s", be: 16939}, {l:"2p1/2", be: 16244}, {l:"2p3/2", be: 13814}, {l:"3s", be: 4149}, {l:"3p1/2", be: 3854}, {l:"3p3/2", be: 3302}, {l:"3d3/2", be: 2798}, {l:"3d5/2", be: 2683}, {l:"4s", be: 995}, {l:"4p1/2", be: 851}, {l:"4p3/2", be: 705}, {l:"4d3/2", be: 500}, {l:"4d5/2", be: 473}, {l:"4f5/2", be: 184}, {l:"4f7/2", be: 184, p:true}, {l:"5s", be: 177}, {l:"5p1/2", be: 132}, {l:"5p3/2", be: 104}, {l:"5d3/2", be: 31}, {l:"5d5/2", be: 31}] },
+            85: { symbol: "At", name: "Astatine", peaks: [{l:"1s", be: 95730}, {l:"2s", be: 17493}, {l:"2p1/2", be: 16785}, {l:"2p3/2", be: 14214}, {l:"3s", be: 4317}, {l:"3p1/2", be: 4008}, {l:"3p3/2", be: 3426}, {l:"3d3/2", be: 2909}, {l:"3d5/2", be: 2787}, {l:"4s", be: 1042}, {l:"4p1/2", be: 886}, {l:"4p3/2", be: 740}, {l:"4d3/2", be: 533}, {l:"4d5/2", be: 507}, {l:"4f5/2", be: 210}, {l:"4f7/2", be: 210, p:true}, {l:"5s", be: 195}, {l:"5p1/2", be: 148}, {l:"5p3/2", be: 115}, {l:"5d3/2", be: 40}, {l:"5d5/2", be: 40}] },
+            86: { symbol: "Rn", name: "Radon", peaks: [{l:"1s", be: 98404}, {l:"2s", be: 18049}, {l:"2p1/2", be: 17337}, {l:"2p3/2", be: 14619}, {l:"3s", be: 4482}, {l:"3p1/2", be: 4159}, {l:"3p3/2", be: 3538}, {l:"3d3/2", be: 3022}, {l:"3d5/2", be: 2892}, {l:"4s", be: 1097}, {l:"4p1/2", be: 929}, {l:"4p3/2", be: 768}, {l:"4d3/2", be: 567}, {l:"4d5/2", be: 541}, {l:"4f5/2", be: 238}, {l:"4f7/2", be: 238, p:true}, {l:"5s", be: 214}, {l:"5p1/2", be: 164}, {l:"5p3/2", be: 127}, {l:"5d3/2", be: 48}, {l:"5d5/2", be: 48}, {l:"6s", be: 26}] },
+            87: { symbol: "Fr", name: "Francium", peaks: [{l:"1s", be: 101137}, {l:"2s", be: 18639}, {l:"2p1/2", be: 17907}, {l:"2p3/2", be: 15031}, {l:"3s", be: 4652}, {l:"3p1/2", be: 4327}, {l:"3p3/2", be: 3663}, {l:"3d3/2", be: 3136}, {l:"3d5/2", be: 3000}, {l:"4s", be: 1153}, {l:"4p1/2", be: 980}, {l:"4p3/2", be: 810}, {l:"4d3/2", be: 603}, {l:"4d5/2", be: 577}, {l:"4f5/2", be: 268}, {l:"4f7/2", be: 268, p:true}, {l:"5s", be: 234}, {l:"5p1/2", be: 182}, {l:"5p3/2", be: 140}, {l:"5d3/2", be: 58}, {l:"5d5/2", be: 58}, {l:"6s", be: 34}, {l:"6p1/2", be: 15}, {l:"6p3/2", be: 15}] },
+            88: { symbol: "Ra", name: "Radium", peaks: [{l:"1s", be: 103922}, {l:"2s", be: 19237}, {l:"2p1/2", be: 18484}, {l:"2p3/2", be: 15444}, {l:"3s", be: 4822}, {l:"3p1/2", be: 4490}, {l:"3p3/2", be: 3792}, {l:"3d3/2", be: 3248}, {l:"3d5/2", be: 3105}, {l:"4s", be: 1208}, {l:"4p1/2", be: 1058}, {l:"4p3/2", be: 879}, {l:"4d3/2", be: 636}, {l:"4d5/2", be: 603}, {l:"4f5/2", be: 299}, {l:"4f7/2", be: 299, p:true}, {l:"5s", be: 254}, {l:"5p1/2", be: 200}, {l:"5p3/2", be: 153}, {l:"5d3/2", be: 68}, {l:"5d5/2", be: 68}, {l:"6s", be: 44}, {l:"6p1/2", be: 19}, {l:"6p3/2", be: 19}] },
+            89: { symbol: "Ac", name: "Actinium", peaks: [{l:"1s", be: 106755}, {l:"2s", be: 19840}, {l:"2p1/2", be: 19083}, {l:"2p3/2", be: 15871}, {l:"3s", be: 5002}, {l:"3p1/2", be: 4656}, {l:"3p3/2", be: 3909}, {l:"3d3/2", be: 3370}, {l:"3d5/2", be: 3219}, {l:"4s", be: 1269}, {l:"4p1/2", be: 1080}, {l:"4p3/2", be: 890}, {l:"4d3/2", be: 675}, {l:"4d5/2", be: 639}, {l:"4f5/2", be: 319}, {l:"4f7/2", be: 319, p:true}, {l:"5s", be: 272}, {l:"5p1/2", be: 215}, {l:"5p3/2", be: 167}, {l:"5d3/2", be: 80}, {l:"5d5/2", be: 80}] },
+            90: { symbol: "Th", name: "Thorium", peaks: [{l:"1s", be: 109651}, {l:"2s", be: 20472}, {l:"2p1/2", be: 19693}, {l:"2p3/2", be: 16300}, {l:"3s", be: 5182}, {l:"3p1/2", be: 4830}, {l:"3p3/2", be: 4046}, {l:"3d3/2", be: 3491}, {l:"3d5/2", be: 3332}, {l:"4s", be: 1330}, {l:"4p1/2", be: 1168}, {l:"4p3/2", be: 966.4}, {l:"4d3/2", be: 712.1}, {l:"4d5/2", be: 675.2}, {l:"4f5/2", be: 342.4}, {l:"4f7/2", be: 333.1, p:true}, {l:"5s", be: 290}, {l:"5p1/2", be: 229}, {l:"5p3/2", be: 182}, {l:"5d3/2", be: 92.5}, {l:"5d5/2", be: 85.4}, {l:"6s", be: 41.4}, {l:"6p1/2", be: 24.5}, {l:"6p3/2", be: 16.6}] },
+            91: { symbol: "Pa", name: "Protactinium", peaks: [{l:"1s", be: 112601}, {l:"2s", be: 21105}, {l:"2p1/2", be: 20314}, {l:"2p3/2", be: 16733}, {l:"3s", be: 5367}, {l:"3p1/2", be: 5001}, {l:"3p3/2", be: 4174}, {l:"3d3/2", be: 3611}, {l:"3d5/2", be: 3442}, {l:"4s", be: 1387}, {l:"4p1/2", be: 1224}, {l:"4p3/2", be: 1007}, {l:"4d3/2", be: 743}, {l:"4d5/2", be: 708}, {l:"4f5/2", be: 371}, {l:"4f7/2", be: 360, p:true}, {l:"5s", be: 310}, {l:"5p1/2", be: 232}, {l:"5p3/2", be: 232}, {l:"5d3/2", be: 94}, {l:"5d5/2", be: 94}] },
+            92: { symbol: "U", name: "Uranium", peaks: [{l:"1s", be: 115606}, {l:"2s", be: 21757}, {l:"2p1/2", be: 20948}, {l:"2p3/2", be: 17166}, {l:"3s", be: 5548}, {l:"3p1/2", be: 5182}, {l:"3p3/2", be: 4303}, {l:"3d3/2", be: 3728}, {l:"3d5/2", be: 3552}, {l:"4s", be: 1439}, {l:"4p1/2", be: 1271}, {l:"4p3/2", be: 1043}, {l:"4d3/2", be: 778.3}, {l:"4d5/2", be: 736.2}, {l:"4f5/2", be: 388.2}, {l:"4f7/2", be: 377.4, p:true}, {l:"5s", be: 321}, {l:"5p1/2", be: 257}, {l:"5p3/2", be: 192}, {l:"5d3/2", be: 102.8}, {l:"5d5/2", be: 94.2}, {l:"6s", be: 43.9}, {l:"6p1/2", be: 26.8}, {l:"6p3/2", be: 16.8}] },
+            93: { symbol: "Np", name: "Neptunium", peaks: [{l:"4f7/2", be: 402.0, p:true}] },
+            94: { symbol: "Pu", name: "Plutonium", peaks: [{l:"4f7/2", be: 422.1, p:true}] },
+            95: { symbol: "Am", name: "Americium", peaks: [{l:"4f7/2", be: 448.0, p:true}] },
+            96: { symbol: "Cm", name: "Curium", peaks: [{l:"4f7/2", be: 470.0, p:true}] },
+            97: { symbol: "Bk", name: "Berkelium", peaks: [{l:"4f7/2", be: 492.0, p:true}] },
+            98: { symbol: "Cf", name: "Californium", peaks: [{l:"4f7/2", be: 515.0, p:true}] },
+            99: { symbol: "Es", name: "Einsteinium", peaks: [{l:"4f7/2", be: 538.0, p:true}] },
+            100: { symbol: "Fm", name: "Fermium", peaks: [{l:"4f7/2", be: 562.0, p:true}] },
+            101: { symbol: "Md", name: "Mendelevium", peaks: [{l:"4f7/2", be: 587.0, p:true}] },
+            102: { symbol: "No", name: "Nobelium", peaks: [{l:"4f7/2", be: 612.0, p:true}] },
+            103: { symbol: "Lr", name: "Lawrencium", peaks: [{l:"4f7/2", be: 637.0, p:true}] }
+        };
+
+        // --- Logic ---
+        
+        let zoomLevel = 100; // Pixels per 100 eV
+        let allPeaks = [];
+        let maxEnergy = 120000;
+        
+        // 1. Flatten Data
+        for(let key in elementsData) {
+            let el = elementsData[key];
+            if(el.peaks) {
+                el.peaks.forEach(peak => {
+                    let beVal = parseFloat(peak.be);
+                    if(!isNaN(beVal)) {
+                        allPeaks.push({
+                            element: el.name,
+                            symbol: el.symbol,
+                            orbital: peak.l,
+                            energy: beVal,
+                            fingerprint: peak.p || false
+                        });
+                    }
+                });
+            }
+        }
+        allPeaks.sort((a,b) => a.energy - b.energy);
+
+        const track = document.getElementById('spectrum-track');
+        const mainContainer = document.getElementById('main-container');
+        const zoomSlider = document.getElementById('zoomSlider');
+        const peaksContainer = document.getElementById('peaks-container');
+        const ticksContainer = document.getElementById('ticks-container');
+        const tooltip = document.getElementById('tooltip');
+        const minimapCanvas = document.getElementById('minimap-canvas');
+        const minimapViewport = document.getElementById('minimap-viewport');
+        const searchInput = document.getElementById('searchInput');
+        const zoomLabel = document.getElementById('zoom-label');
+
+        function renderSpectrum() {
+            // Determine width based on zoom and max energy
+            // Default: 100% zoom = 1486 eV fills screen width (approx 1200px) -> ~0.8 px/eV
+            // Range slider 1-500. 1 = Fit all 120k eV. 500 = Super zoom.
+            
+            let scale = zoomLevel / 100; // Multiplier
+            // Base scale: 1000px = 1000 eV (1px/eV)
+            
+            let width = maxEnergy * scale;
+            if (width < mainContainer.clientWidth) width = mainContainer.clientWidth;
+            
+            track.style.width = width + 'px';
+            
+            // Clear
+            peaksContainer.innerHTML = '';
+            ticksContainer.innerHTML = '';
+
+            // Draw Ticks (Smart Tick Rendering)
+            // Interval depends on zoom. If zoomed out, 10000eV. Zoomed in, 10eV.
+            let tickInterval = 100;
+            if (scale < 0.05) tickInterval = 10000;
+            else if (scale < 0.5) tickInterval = 1000;
+            else if (scale < 2) tickInterval = 100;
+            else tickInterval = 10;
+
+            for(let e = 0; e <= maxEnergy; e += tickInterval) {
+                let pos = e * scale;
+                let tick = document.createElement('div');
+                tick.className = 'axis-tick';
+                tick.style.left = pos + 'px';
+                tick.innerText = e;
+                ticksContainer.appendChild(tick);
+            }
+
+            // Draw Peaks
+            // Optimization: Only draw peaks if visible or just all (DOM handles ~2000 nodes okay)
+            // To prevent overlap chaos, maybe slight offsets or taller markers for fingerprints?
+            
+            allPeaks.forEach(peak => {
+                let pos = peak.energy * scale;
+                let el = document.createElement('div');
+                el.className = `peak-marker ${peak.fingerprint ? 'peak-fingerprint' : ''}`;
+                el.style.left = pos + 'px';
+                el.style.height = peak.fingerprint ? '60%' : '30%'; // Tall for primary
+                el.dataset.symbol = peak.symbol;
+                el.dataset.element = peak.element;
+                
+                // Event Listeners
+                el.addEventListener('mouseenter', (e) => {
+                    tooltip.style.opacity = 1;
+                    tooltip.style.left = e.clientX + 'px';
+                    tooltip.style.top = e.clientY + 'px';
+                    document.getElementById('tt-element').innerText = `${peak.symbol} ${peak.orbital}`;
+                    document.getElementById('tt-energy').innerText = peak.energy;
+                });
+                
+                el.addEventListener('mouseleave', () => {
+                    tooltip.style.opacity = 0;
+                });
+
+                peaksContainer.appendChild(el);
+            });
+            
+            updateMinimap();
+        }
+
+        // --- Minimap Logic ---
+        function updateMinimap() {
+            const ctx = minimapCanvas.getContext('2d');
+            const w = minimapCanvas.width = minimapCanvas.offsetWidth;
+            const h = minimapCanvas.height = minimapCanvas.offsetHeight;
+            
+            // Draw Peaks on Minimap (Simplified)
+            ctx.clearRect(0,0,w,h);
+            ctx.fillStyle = '#475569';
+            ctx.fillRect(0, h/2, w, 1); // Axis
+            
+            // Map 0 - 120000 eV to 0 - w
+            const miniScale = w / maxEnergy;
+            
+            allPeaks.forEach(peak => {
+                let x = peak.energy * miniScale;
+                if(peak.fingerprint) {
+                    ctx.fillStyle = '#fbbf24'; // Amber
+                    ctx.fillRect(x, 5, 2, h-10);
+                } else {
+                    ctx.fillStyle = 'rgba(99, 102, 241, 0.5)'; // Indigo
+                    ctx.fillRect(x, h/3, 1, h/3);
+                }
+            });
+
+            // Update Viewport Rect
+            let visibleRatio = mainContainer.clientWidth / track.offsetWidth;
+            if(visibleRatio > 1) visibleRatio = 1;
+            let scrollRatio = mainContainer.scrollLeft / track.offsetWidth;
+            
+            minimapViewport.style.width = (visibleRatio * 100) + '%';
+            minimapViewport.style.left = (scrollRatio * 100) + '%';
+        }
+
+        // --- Interactions ---
+        
+        // Zoom Slider
+        zoomSlider.addEventListener('input', (e) => {
+            zoomLevel = parseFloat(e.target.value); // Range 1 to 500
+            
+            // Adjust label
+            if(zoomLevel < 10) zoomLabel.innerText = "Wide Range (Survey)";
+            else if(zoomLevel > 200) zoomLabel.innerText = "High Res (Detail)";
+            else zoomLabel.innerText = "Standard (Al Kα)";
+            
+            // Maintain center focus (advanced) or just redraw
+            let centerRatio = (mainContainer.scrollLeft + mainContainer.clientWidth/2) / track.offsetWidth;
+            renderSpectrum();
+            mainContainer.scrollLeft = (centerRatio * track.offsetWidth) - (mainContainer.clientWidth/2);
+        });
+
+        // Scroll Sync
+        mainContainer.addEventListener('scroll', updateMinimap);
+
+        // Minimap Click / Drag
+        let isDraggingMini = false;
+        document.getElementById('minimap').addEventListener('mousedown', (e) => {
+            isDraggingMini = true;
+            moveViaMinimap(e);
+        });
+        document.addEventListener('mousemove', (e) => {
+            if(isDraggingMini) moveViaMinimap(e);
+        });
+        document.addEventListener('mouseup', () => isDraggingMini = false);
+
+        function moveViaMinimap(e) {
+            const rect = document.getElementById('minimap').getBoundingClientRect();
+            const x = e.clientX - rect.left;
+            const ratio = x / rect.width;
+            mainContainer.scrollLeft = (ratio * track.offsetWidth) - (mainContainer.clientWidth / 2);
+        }
+
+        // Search Highlighting
+        searchInput.addEventListener('input', (e) => {
+            const term = e.target.value.toLowerCase();
+            const markers = document.querySelectorAll('.peak-marker');
+            
+            markers.forEach(m => {
+                if(term === '') {
+                    m.style.opacity = 1;
+                    m.style.backgroundColor = '';
+                    m.style.zIndex = '';
+                    return;
+                }
+                
+                const sym = m.dataset.symbol.toLowerCase();
+                const name = m.dataset.element.toLowerCase();
+                
+                if(sym.includes(term) || name.includes(term)) {
+                    m.style.opacity = 1;
+                    m.style.backgroundColor = '#ec4899'; // Pink Highlight
+                    m.style.zIndex = 100;
+                    m.style.width = '4px';
+                } else {
+                    m.style.opacity = 0.1;
+                    m.style.width = '';
+                    m.style.zIndex = '';
+                }
+            });
+        });
+
+        // Initialize
+        // Set initial zoom to show Al K Alpha range comfortably (0-1500eV)
+        // 1500 eV should be approx screen width.
+        // Scale = Width / Energy = 1200 / 1500 = 0.8
+        // Our zoomLevel is roughly px per eV * 100? No, let's just calc initial
+        // Let's set slider to give ~1px per eV initially.
+        zoomLevel = 100; 
+        zoomSlider.value = 100;
+        renderSpectrum();
+
+    </script>
+</body>
+</html>
