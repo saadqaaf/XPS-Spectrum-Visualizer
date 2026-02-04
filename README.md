@@ -1,4 +1,4 @@
-# 📉 Binding Ener Spectrum Visualizer
+# 📉 Binding Energy Spectrum Visualizer
 
 A linear, interactive visualization tool for exploring the entire X-ray Photoelectron Spectroscopy (XPS) binding energy range. Unlike standard tables, this tool maps energies from 0 eV to 120,000 eV on a continuous scale, helping users visualize peak distribution and overlaps.
 
