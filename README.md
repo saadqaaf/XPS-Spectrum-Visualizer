@@ -35,7 +35,7 @@ This tool is a Single-File Application (SPA) using HTML5 Canvas. It runs entirel
 3. Under **Build and deployment**, select `main` from the branch dropdown and click **Save**.
 4. Your tool will be live at:
    ```
-   https://sadegh-ghorbanzadeh.github.io/XPS-Spectrum-Visualizer/
+   https://saadqaaf.github.io/XPS-Spectrum-Visualizer/
    ```
 
 ## 💻 Tech Stack
